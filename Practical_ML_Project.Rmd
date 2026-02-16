@@ -1,0 +1,121 @@
+---
+title: "Practical_ML_Project"
+author: "Pratik A. Khare"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<!-- This next code chunk is for useful packages -->
+```{r, echo = FALSE}
+library(pander)
+library(caret)
+library(rpart.plot)
+library(doParallel)
+```
+
+## Objective of the project
+The objective of this project is to develop and evaluate predictive models for classifying human activity using accelerometer data. Through exploratory data analysis, data preprocessing, and comparison of multiple classification algorithms, we aim to identify a robust and accurate model for reliable out-of-sample prediction.
+
+## Exploratory Data Analysis
+Now, let's load the data and perform some exploratory data analysis
+```{r, echo=FALSE}
+training_imported <- read.csv("C:/PRATIK/MISC/Coding/Data Science Stats and ML (Coursera)/Practical_ML/pml-training.csv")
+
+val_imported <- read.csv("C:/PRATIK/MISC/Coding/Data Science Stats and ML (Coursera)/Practical_ML/pml-testing.csv")
+```
+ * The dimensions of the training dataset are `r nrow(training_imported)` by `r ncol(training_imported)` and for the validation dataset are `r nrow(val_imported)` by `r ncol(val_imported)`
+ * The classe variable which will be the output for our predictions looks like this:
+`r pander(table(training_imported$classe))`
+ * The first 20 column names in training and test set are: `r head(colnames(training_imported), 20)`.
+ * We won't go into the details of other columns as there are many. Since we need to filter the empty or N/A data though, let's examine what percentage of the data is N/A: `r mean(is.na(training_imported)) * 100`%
+
+## Data Filtering
+Before applying any individual data filtering steps, we shall split the training dataset into training and testing:
+```{r, echo = TRUE}
+set.seed(123)
+inTrain <- createDataPartition(y=training_imported$classe, p=0.6, list=FALSE)
+training <- training_imported[inTrain,]
+test <- training_imported[-inTrain,]
+```
+
+ 1. Getting rid of variables which are not predictors, such as "username", "timestamp" etc: 
+```{r, echo = TRUE}
+cols_to_remove <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window")
+training_filtered <- training[, !(names(training) %in% cols_to_remove)]
+```
+
+ 2. Getting rid of all columns which have greater than 90% of the values as N/A:
+```{r, echo = TRUE}
+na_cols <- colSums(is.na(training_filtered))>0.9*nrow(training)
+training_filtered <- training_filtered[, !na_cols]
+```
+
+ 3. Removing variables with near zero variance which won't have much impact on the model:
+```{r, echo = TRUE}
+nzv <- nearZeroVar(training_filtered)
+training_filtered <- training_filtered[, -nzv]
+```
+
+Now, to ensure that the test and validation datasets have the same columns as the filtered training set:
+```{r, echo = TRUE}
+test_filtered <- test[, colnames(training_filtered)]
+val_filtered <- val_imported[, setdiff(colnames(training_filtered),"classe")]
+```
+
+Ultimately, we are left with `r ncol(val_filtered)` columns in the validation dataset and `r ncol(training_filtered)` columns in the training dataset
+
+## Model development and prediction
+Next, we will use different classification algorithms and compare the accuracy of predictions on the test dataset. Specifically, we will use:
+ 1. Decision Trees
+ 2. Random Forest
+
+We will begin by converting the classe variable to factor first:
+```{r, echo = TRUE}
+# Let us ensure that the classe variable is a factor in the training and test data
+training_filtered$classe <- factor(training_filtered$classe)
+test_filtered$classe <- factor(test_filtered$classe, levels = levels(training_filtered$classe))
+```
+
+### Decision Trees
+```{r, echo = TRUE}
+ctrl <- trainControl(method = "cv", number = 5) # Cross validation parameter
+moddt <- train(classe ~ ., data = training_filtered, method = "rpart", trControl = ctrl)
+preddt <- predict(moddt, newdata = test_filtered[, setdiff(names(test_filtered), "classe")])
+rpart.plot(moddt$finalModel)
+
+cmdt <- confusionMatrix(preddt, test_filtered$classe)
+cmdt
+```
+
+The accuracy of the decision tree **with 5-fold cross validation** is: `r round(cmdt$overall["Accuracy"] * 100, digits = 2)`%
+
+### Random Forest
+```{r, echo = TRUE}
+cl <- makePSOCKcluster(2)
+registerDoParallel(cl)
+ctrl <- trainControl(method = "cv", number = 3, allowParallel = TRUE) # Cross validation parameter
+modrf <- train(classe ~ ., data = training_filtered, method = "rf", trControl = ctrl, ntree = 100)
+stopCluster(cl)
+registerDoSEQ()
+
+predrf <- predict(modrf, newdata = test_filtered[, setdiff(names(test_filtered), "classe")])
+
+cmrf <- confusionMatrix(predrf, test_filtered$classe)
+cmrf
+```
+
+The accuracy of the random forest **with 5-fold cross validation** is: `r round(cmrf$overall["Accuracy"] * 100, digits = 2)`%
+
+## Applying the model for the prediction assignment
+
+```{r, echo = TRUE}
+final_ans <- predict(modrf, newdata = val_filtered)
+```
+The final predictions for the 20 unknown cases are: `r final_ans`
+
+## Conclusion
+The random forest model is better as it predicts with a much higher accuracy and yields the correct predictions for the validation dataset (20 samples)
